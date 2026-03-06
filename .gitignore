@@ -6,3 +6,5 @@
 custom_components/webrtc/__pycache__/
 
 node_modules/
+package-lock.json
+tests/__pycache__/
