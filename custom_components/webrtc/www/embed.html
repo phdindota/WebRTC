@@ -87,29 +87,79 @@
 
     document.body.appendChild(card);
 
+    // --- Splash screen dismissal logic ---
     const splash = document.getElementById('splash');
+    let splashDismissed = false;
+
+    let posterCheck = null;
 
     function hideSplash() {
+        if (splashDismissed) return;
+        splashDismissed = true;
+        clearInterval(posterCheck);
         if (splash && splash.parentNode) {
             splash.classList.add('hidden');
+            // Wait slightly longer than the 0.5s CSS transition before removing
             setTimeout(() => {
                 if (splash.parentNode) splash.remove();
-            }, 500);
+            }, 600);
         }
     }
 
-    const observer = new MutationObserver(() => {
-        const video = document.querySelector('video');
-        if (video) {
-            observer.disconnect();
-            const fallback = setTimeout(hideSplash, 10000);
-            video.addEventListener('playing', () => {
-                clearTimeout(fallback);
-                hideSplash();
-            }, {once: true});
+    // Poll for the video element inside the shadow DOM since
+    // MutationObserver cannot see inside shadow roots
+    const pollInterval = setInterval(() => {
+        if (splashDismissed) {
+            clearInterval(pollInterval);
+            return;
         }
-    });
-    observer.observe(document.body, {childList: true, subtree: true});
+
+        // The video element lives inside the webrtc-camera shadow DOM
+        const shadow = card.shadowRoot;
+        const video = shadow
+            ? shadow.querySelector('video')
+            : card.querySelector('video');
+
+        if (!video) return;
+
+        // Found the video element - attach listeners and stop polling
+        clearInterval(pollInterval);
+
+        // Listen for multiple events - different stream modes fire different events
+        const events = ['playing', 'loadeddata', 'canplay'];
+        events.forEach(evt => {
+            video.addEventListener(evt, () => hideSplash(), {once: true});
+        });
+
+        // Also check if video is already playing (race condition)
+        // readyState >= 2 means HAVE_CURRENT_DATA or better (data available to play)
+        if (video.readyState >= 2 || !video.paused) {
+            hideSplash();
+        }
+
+        // For MJPEG mode: the video gets a poster data URL instead of playing.
+        // Poll for poster changes as an additional detection method.
+        posterCheck = setInterval(() => {
+            if (splashDismissed) {
+                clearInterval(posterCheck);
+                return;
+            }
+            if (video.poster && video.poster.startsWith('data:')) {
+                hideSplash();
+            }
+        }, 500);
+
+        // Clear poster check after 15s to avoid leaking if neither video events
+        // nor poster changes have triggered hideSplash by then
+        setTimeout(() => clearInterval(posterCheck), 15000);
+
+    }, 100); // Check every 100ms for the video element
+
+    // Fallback: always hide after 8 seconds no matter what
+    setTimeout(() => {
+        clearInterval(pollInterval);
+        hideSplash();
+    }, 8000);
 </script>
 </body>
 </html>
