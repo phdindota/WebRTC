@@ -7,7 +7,7 @@ from urllib.parse import urlencode, urljoin
 
 import voluptuous as vol
 from aiohttp import web
-from aiohttp.web_exceptions import HTTPUnauthorized, HTTPGone, HTTPNotFound
+from aiohttp.web_exceptions import HTTPUnauthorized, HTTPGone, HTTPNotFound, HTTPTooManyRequests
 from homeassistant.core import HomeAssistant
 from homeassistant.components.camera import async_get_stream_source, async_get_image
 from homeassistant.components.http import HomeAssistantView
@@ -23,6 +23,50 @@ from . import utils
 from .utils import DOMAIN, Server
 
 _LOGGER = logging.getLogger(__name__)
+
+# Rate limiting for WebSocket auth failures
+AUTH_FAILURES = {}  # ip -> [count, first_failure_ts]
+AUTH_RATE_LIMIT = 10  # max failures per window
+AUTH_RATE_WINDOW = 60  # seconds
+
+# Max age (in seconds) before a LINKS entry is considered stale
+MAX_LINK_AGE = 86400  # 24 hours
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """Return True if the IP is rate limited."""
+    now = time.time()
+    if ip in AUTH_FAILURES:
+        count, first_ts = AUTH_FAILURES[ip]
+        if now - first_ts > AUTH_RATE_WINDOW:
+            del AUTH_FAILURES[ip]
+            return False
+        return count >= AUTH_RATE_LIMIT
+    return False
+
+
+def _record_auth_failure(ip: str):
+    """Record an auth failure for the given IP."""
+    now = time.time()
+    if ip in AUTH_FAILURES:
+        count, first_ts = AUTH_FAILURES[ip]
+        if now - first_ts > AUTH_RATE_WINDOW:
+            AUTH_FAILURES[ip] = [1, now]
+        else:
+            AUTH_FAILURES[ip] = [count + 1, first_ts]
+    else:
+        AUTH_FAILURES[ip] = [1, now]
+
+
+def _cleanup_stale_links():
+    """Remove LINKS entries older than MAX_LINK_AGE."""
+    now = time.time()
+    stale = [
+        k for k, v in LINKS.items()
+        if v.get("created_at", 0) and now - v["created_at"] > MAX_LINK_AGE
+    ]
+    for k in stale:
+        LINKS.pop(k, None)
 
 CREATE_LINK_SCHEMA = vol.Schema(
     {
@@ -47,12 +91,19 @@ DASH_CAST_SCHEMA = vol.Schema(
     required=True,
 )
 
+STOP_CAST_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+    },
+    required=True,
+)
+
 LINKS = {}  # 2 3 4
 
 # DDoS protection against requests to HLS proxy
 # streams are additionally protected by a random playlist identifier
 HLS_COOKIE = "webrtc-hls-session"
-HLS_SESSION = str(uuid.uuid4())
+HLS_SESSIONS: set = set()
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -79,20 +130,24 @@ async def async_setup(hass: HomeAssistant, config: dict):
     async def create_link(call: ServiceCall):
         link_id = call.data["link_id"]
         ttl = call.data["time_to_live"]
+        _cleanup_stale_links()
         LINKS[link_id] = {
             "url": call.data.get("url"),
             "entity": call.data.get("entity"),
             "limit": call.data["open_limit"],
             "ts": time.time() + ttl if ttl else 0,
+            "created_at": time.time(),
         }
 
     async def dash_cast(call: ServiceCall):
         link_id = uuid.uuid4().hex
+        _cleanup_stale_links()
         LINKS[link_id] = {
             "url": call.data.get("url"),  # camera URL (rtsp...)
             "entity": call.data.get("entity"),  # camera entity id
             "limit": 0,  # unlimited reconnections for cast sessions
             "ts": 0,     # no expiry - link valid for entire cast session
+            "created_at": time.time(),
         }
 
         hass_url = call.data.get("hass_url") or get_url(hass)
@@ -113,10 +168,28 @@ async def async_setup(hass: HomeAssistant, config: dict):
     hass.services.async_register(DOMAIN, "create_link", create_link, CREATE_LINK_SCHEMA)
     hass.services.async_register(DOMAIN, "dash_cast", dash_cast, DASH_CAST_SCHEMA)
 
+    async def stop_cast(call: ServiceCall):
+        """Stop casting on specified Chromecast devices."""
+        entities = call.data[ATTR_ENTITY_ID]
+        _cleanup_stale_links()
+        try:
+            for entity in hass.data[utils.DATA_INSTANCES]["media_player"].entities:
+                if entity.entity_id not in entities:
+                    continue
+                if hasattr(entity, "_chromecast"):
+                    entity._chromecast.quit_app()
+                    _LOGGER.debug(f"Stopped cast on {entity.entity_id}")
+        except Exception as e:
+            _LOGGER.error(f"Can't stop cast on {entities}", exc_info=e)
+
+    hass.services.async_register(DOMAIN, "stop_cast", stop_cast, STOP_CAST_SCHEMA)
+
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
     # 1. If user set custom url
     go_url = entry.data.get(CONF_URL)
 
@@ -149,6 +222,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     return True
 
 
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old entry."""
+    _LOGGER.debug("Migrating from version %s", config_entry.version)
+    return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry):
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def ws_connect(hass: HomeAssistant, params: dict) -> str:
     # 1. Server URL from card param
     server: str = params.get("server")
@@ -157,7 +241,8 @@ async def ws_connect(hass: HomeAssistant, params: dict) -> str:
         server: str | Server = hass.data[DOMAIN]
     # 3. Server is manual binary
     if isinstance(server, Server):
-        assert server.available, "WebRTC server not available"
+        if not server.available:
+            raise ConnectionError("WebRTC server not available")
         server = "http://localhost:1984/"
 
     if entity_id := params.get("entity"):
@@ -167,11 +252,16 @@ async def ws_connect(hass: HomeAssistant, params: dict) -> str:
             if state := hass.states.get(entity_id):
                 if token := state.attributes.get("access_token"):
                     src = f"{get_url(hass)}/api/camera_proxy_stream/{entity_id}?token={token}"
-        assert src, f"Can't get URL for {entity_id}"
+        if not src:
+            raise ValueError(f"Can't get URL for {entity_id}")
+        if len(src) > 2048:
+            raise ValueError("URL too long")
         query = {"src": src, "name": entity_id}
     elif src := params.get("url"):
         if "{{" in src or "{%" in src:
             src = Template(src, hass).async_render()
+        if len(src) > 2048:
+            raise ValueError("URL too long")
         query = {"src": src}
     else:
         raise Exception("Missing url or entity")
@@ -192,6 +282,9 @@ def _get_image_from_entity_id(hass: HomeAssistant, entity_id: str):
 
 async def ws_poster(hass: HomeAssistant, params: dict) -> web.Response:
     poster: str = params["poster"]
+
+    if len(poster) > 2048:
+        raise ValueError("Poster value too long")
 
     if "{{" in poster or "{%" in poster:
         # support Jinja2 tempaltes inside poster
@@ -215,6 +308,8 @@ async def ws_poster(hass: HomeAssistant, params: dict) -> web.Response:
     url = urljoin(url, "api/frame.jpeg") + "?" + urlencode({"src": poster})
 
     async with async_get_clientsession(hass).get(url) as r:
+        if not r.ok:
+            return web.Response(status=r.status, text=f"Failed to get poster: HTTP {r.status}")
         body = await r.read()
         return web.Response(body=body, content_type=r.content_type)
 
@@ -227,6 +322,8 @@ class WebSocketView(HomeAssistantView):
     async def get(self, request: web.Request):
         params = request.query
         _LOGGER.debug(f"New client: {dict(params)}")
+
+        _cleanup_stale_links()
 
         if request.query.get("embed"):
             link_id = request.query.get("url")
@@ -247,6 +344,12 @@ class WebSocketView(HomeAssistantView):
 
         # fix for https://github.com/AlexxIT/WebRTC/pull/320
         elif not utils.validate_signed_request(request):
+            ip = request.headers.get("X-Forwarded-For", request.remote)
+            if ip:
+                ip = ip.split(",")[0].strip()
+            _record_auth_failure(ip)
+            if _check_rate_limit(ip):
+                raise HTTPTooManyRequests()
             # you shall not pass
             raise HTTPUnauthorized()
 
@@ -256,7 +359,9 @@ class WebSocketView(HomeAssistantView):
             return await ws_poster(hass, params)
 
         ws_server = web.WebSocketResponse(autoclose=False, autoping=False)
-        ws_server.set_cookie(HLS_COOKIE, HLS_SESSION)
+        hls_session = str(uuid.uuid4())
+        HLS_SESSIONS.add(hls_session)
+        ws_server.set_cookie(HLS_COOKIE, hls_session)
         await ws_server.prepare(request)
 
         try:
@@ -278,16 +383,23 @@ class WebSocketView(HomeAssistantView):
                 },
             ) as ws_client:
                 # Proxy requests
-                await asyncio.wait(
-                    [
-                        asyncio.create_task(utils.websocket_forward(ws_server, ws_client)),
-                        asyncio.create_task(utils.websocket_forward(ws_client, ws_server)),
-                    ],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
+                tasks = [
+                    asyncio.create_task(utils.websocket_forward(ws_server, ws_client)),
+                    asyncio.create_task(utils.websocket_forward(ws_client, ws_server)),
+                ]
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
         except Exception as e:
             await ws_server.send_json({"type": "error", "value": str(e)})
+
+        finally:
+            HLS_SESSIONS.discard(hls_session)
 
         return ws_server
 
@@ -298,7 +410,7 @@ class HLSView(HomeAssistantView):
     requires_auth = False
 
     async def get(self, request: web.Request, filename: str):
-        if request.cookies.get(HLS_COOKIE) != HLS_SESSION:
+        if request.cookies.get(HLS_COOKIE) not in HLS_SESSIONS:
             raise HTTPUnauthorized()
 
         if filename not in ("playlist.m3u8", "init.mp4", "segment.m4s", "segment.ts"):

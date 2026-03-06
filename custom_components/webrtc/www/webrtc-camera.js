@@ -100,6 +100,10 @@ class WebRTCCamera extends VideoRTC {
         return {'url': ''};
     }
 
+    static getConfigElement() {
+        return document.createElement('webrtc-camera-editor');
+    }
+
     setStatus(mode, status) {
         const divMode = this.querySelector('.mode').innerText;
         if (mode === 'error' && divMode !== 'Loading..' && divMode !== 'Loading...') return;
@@ -406,7 +410,19 @@ class WebRTCCamera extends VideoRTC {
         const template = JSON.stringify(this.config.ptz);
         const handle = path => {
             if (!this.config.ptz['data_' + path]) return;
-            const config = template.indexOf('${') < 0 ? this.config.ptz : JSON.parse(eval('`' + template + '`'));
+            let config;
+            if (template.indexOf('${') < 0) {
+                config = this.config.ptz;
+            } else {
+                try {
+                    const fn = new Function('states', 'return `' + template + '`');
+                    const states = this.hass ? this.hass.states : undefined;
+                    config = JSON.parse(fn(states));
+                } catch (e) {
+                    console.debug(e);
+                    config = this.config.ptz;
+                }
+            }
             const [domain, service] = config.service.split('.', 2);
             const data = config['data_' + path];
             this.hass.callService(domain, service, data);
@@ -659,8 +675,9 @@ class WebRTCCamera extends VideoRTC {
         if (template.indexOf('${') >= 0) {
             const render = () => {
                 try {
+                    const fn = new Function('states', 'return `' + template + '`');
                     const states = this.hass ? this.hass.states : undefined;
-                    this.config[name] = JSON.parse(eval('`' + template + '`'));
+                    this.config[name] = JSON.parse(fn(states));
                     renderHTML();
                 } catch (e) {
                     console.debug(e);
@@ -681,6 +698,88 @@ class WebRTCCamera extends VideoRTC {
         );
     }
 }
+
+class WebRTCCameraEditor extends HTMLElement {
+    setConfig(config) {
+        this._config = config;
+        this.render();
+    }
+
+    render() {
+        if (!this._config) return;
+
+        this.innerHTML = `
+            <div style="padding: 16px;">
+                <div style="margin-bottom: 8px;">
+                    <label style="display: block; margin-bottom: 4px; font-weight: 500;">Stream URL</label>
+                    <input type="text" id="url"
+                           placeholder="rtsp://..."
+                           style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <label style="display: block; margin-bottom: 4px; font-weight: 500;">Camera Entity</label>
+                    <input type="text" id="entity"
+                           placeholder="camera.front_door"
+                           style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <label style="display: block; margin-bottom: 4px; font-weight: 500;">Poster</label>
+                    <input type="text" id="poster"
+                           placeholder="camera.front_door or URL"
+                           style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <label style="display: inline-flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="ui">
+                        Show UI Controls
+                    </label>
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <label style="display: inline-flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="muted">
+                        Muted by default
+                    </label>
+                </div>
+            </div>
+        `;
+
+        // Set values via DOM API to avoid HTML injection
+        this.querySelector('#url').value = this._config.url || '';
+        this.querySelector('#entity').value = this._config.entity || '';
+        this.querySelector('#poster').value = this._config.poster || '';
+        this.querySelector('#ui').checked = !!this._config.ui;
+        this.querySelector('#muted').checked = !!this._config.muted;
+
+        this.querySelectorAll('input').forEach(input => {
+            input.addEventListener('change', () => this._valueChanged());
+        });
+    }
+
+    _valueChanged() {
+        const config = {...this._config};
+
+        const url = this.querySelector('#url').value;
+        const entity = this.querySelector('#entity').value;
+        const poster = this.querySelector('#poster').value;
+        const ui = this.querySelector('#ui').checked;
+        const muted = this.querySelector('#muted').checked;
+
+        if (url) config.url = url; else delete config.url;
+        if (entity) config.entity = entity; else delete config.entity;
+        if (poster) config.poster = poster; else delete config.poster;
+        if (ui) config.ui = true; else delete config.ui;
+        if (muted) config.muted = true; else delete config.muted;
+
+        const event = new CustomEvent('config-changed', {
+            detail: {config},
+            bubbles: true,
+            composed: true,
+        });
+        this.dispatchEvent(event);
+    }
+}
+
+customElements.define('webrtc-camera-editor', WebRTCCameraEditor);
 
 customElements.define('webrtc-camera', WebRTCCamera);
 

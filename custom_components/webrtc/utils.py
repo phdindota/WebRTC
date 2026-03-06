@@ -5,6 +5,7 @@ import platform
 import re
 import stat
 import subprocess
+import time
 import zipfile
 from threading import Thread
 from typing import Optional
@@ -74,6 +75,7 @@ def validate_binary(hass: HomeAssistant) -> Optional[str]:
         if os.path.isfile(filename) and subprocess.check_output(
             [filename, "-v"]
         ).startswith(b"go2rtc"):
+            _LOGGER.info(f"go2rtc binary version: {BINARY_VERSION}")
             return filename
     except Exception:
         pass
@@ -107,6 +109,7 @@ def validate_binary(hass: HomeAssistant) -> Optional[str]:
     # change binary access rights
     os.chmod(filename, os.stat(filename).st_mode | stat.S_IEXEC)
 
+    _LOGGER.info(f"go2rtc binary version: {BINARY_VERSION}")
     return filename
 
 
@@ -243,7 +246,13 @@ class Server(Thread):
         return self.process.poll() is None if self.process else False
 
     def run(self):
+        restart_count = 0
+        max_restarts = 10
+        base_delay = 1  # seconds
+        max_delay = 60  # seconds
+
         while self.binary:
+            start_time = time.time()
             self.process = subprocess.Popen(
                 [self.binary], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
             )
@@ -254,6 +263,25 @@ class Server(Thread):
                 if line == b"":
                     break
                 _LOGGER.debug(line[:-1].decode())
+
+            if not self.binary:
+                break  # intentional stop
+
+            runtime = time.time() - start_time
+            if runtime < 5:  # crashed quickly
+                restart_count += 1
+                if restart_count >= max_restarts:
+                    _LOGGER.error(f"go2rtc crashed {restart_count} times, giving up")
+                    self.binary = None
+                    break
+                delay = min(base_delay * (2 ** (restart_count - 1)), max_delay)
+                _LOGGER.warning(
+                    f"go2rtc crashed after {runtime:.1f}s, restarting in {delay}s "
+                    f"(attempt {restart_count}/{max_restarts})"
+                )
+                time.sleep(delay)
+            else:
+                restart_count = 0  # reset if it ran for a while
 
     def stop(self, *args):
         self.binary = None
