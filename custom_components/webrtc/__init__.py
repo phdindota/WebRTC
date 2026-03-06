@@ -8,7 +8,7 @@ from urllib.parse import urlencode, urljoin
 import voluptuous as vol
 from aiohttp import web
 from aiohttp.web_exceptions import HTTPUnauthorized, HTTPGone, HTTPNotFound
-from homeassistant.components.binary_sensor import HomeAssistant  # fix tests
+from homeassistant.core import HomeAssistant
 from homeassistant.components.camera import async_get_stream_source, async_get_image
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
