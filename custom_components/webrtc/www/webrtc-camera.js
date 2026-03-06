@@ -712,36 +712,43 @@ class WebRTCCameraEditor extends HTMLElement {
             <div style="padding: 16px;">
                 <div style="margin-bottom: 8px;">
                     <label style="display: block; margin-bottom: 4px; font-weight: 500;">Stream URL</label>
-                    <input type="text" id="url" value="${this._config.url || ''}"
+                    <input type="text" id="url"
                            placeholder="rtsp://..."
                            style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div style="margin-bottom: 8px;">
                     <label style="display: block; margin-bottom: 4px; font-weight: 500;">Camera Entity</label>
-                    <input type="text" id="entity" value="${this._config.entity || ''}"
+                    <input type="text" id="entity"
                            placeholder="camera.front_door"
                            style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div style="margin-bottom: 8px;">
                     <label style="display: block; margin-bottom: 4px; font-weight: 500;">Poster</label>
-                    <input type="text" id="poster" value="${this._config.poster || ''}"
+                    <input type="text" id="poster"
                            placeholder="camera.front_door or URL"
                            style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div style="margin-bottom: 8px;">
                     <label style="display: inline-flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" id="ui" ${this._config.ui ? 'checked' : ''}>
+                        <input type="checkbox" id="ui">
                         Show UI Controls
                     </label>
                 </div>
                 <div style="margin-bottom: 8px;">
                     <label style="display: inline-flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" id="muted" ${this._config.muted ? 'checked' : ''}>
+                        <input type="checkbox" id="muted">
                         Muted by default
                     </label>
                 </div>
             </div>
         `;
+
+        // Set values via DOM API to avoid HTML injection
+        this.querySelector('#url').value = this._config.url || '';
+        this.querySelector('#entity').value = this._config.entity || '';
+        this.querySelector('#poster').value = this._config.poster || '';
+        this.querySelector('#ui').checked = !!this._config.ui;
+        this.querySelector('#muted').checked = !!this._config.muted;
 
         this.querySelectorAll('input').forEach(input => {
             input.addEventListener('change', () => this._valueChanged());

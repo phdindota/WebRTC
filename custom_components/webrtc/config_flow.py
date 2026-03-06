@@ -17,6 +17,7 @@ class FlowHandler(ConfigFlow, domain=DOMAIN):
     @staticmethod
     def async_get_options_flow(config_entry):
         return OptionsFlowHandler(config_entry)
+
     async def async_step_user(self, user_input=None):
         # check if only one integration instance
         if self._async_current_entries():

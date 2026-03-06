@@ -173,8 +173,7 @@ async def async_setup(hass: HomeAssistant, config: dict):
         entities = call.data[ATTR_ENTITY_ID]
         _cleanup_stale_links()
         try:
-            from .utils import DATA_INSTANCES
-            for entity in hass.data[DATA_INSTANCES]["media_player"].entities:
+            for entity in hass.data[utils.DATA_INSTANCES]["media_player"].entities:
                 if entity.entity_id not in entities:
                     continue
                 if hasattr(entity, "_chromecast"):
@@ -226,11 +225,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Migrate old entry."""
     _LOGGER.debug("Migrating from version %s", config_entry.version)
-
-    if config_entry.version == 1:
-        # Current version, no migration needed
-        pass
-
     return True
 
 
