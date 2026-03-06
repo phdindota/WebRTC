@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 
 import voluptuous as vol
@@ -18,6 +19,8 @@ from homeassistant.helpers.typing import ConfigType
 
 from . import utils
 from .utils import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -90,8 +93,8 @@ class WebRTCPlayer(MediaPlayerEntity):
             resp = await r.json(content_type=None)
             playing = any("type" in p for p in resp["producers"])
             self._attr_state = STATE_PLAYING if playing else STATE_IDLE
-        except:
-            pass
+        except Exception as e:
+            _LOGGER.debug("Error updating WebRTC player state: %s", e)
 
     async def async_browse_media(
         self, media_content_type: str = None, media_content_id: str = None

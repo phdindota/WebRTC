@@ -75,7 +75,7 @@ def validate_binary(hass: HomeAssistant) -> Optional[str]:
             [filename, "-v"]
         ).startswith(b"go2rtc"):
             return filename
-    except:
+    except Exception:
         pass
 
     # remove all old binaries
@@ -90,7 +90,7 @@ def validate_binary(hass: HomeAssistant) -> Optional[str]:
         f"v{BINARY_VERSION}/{get_arch()}"
     )
     _LOGGER.debug(f"Download new binary: {url}")
-    r = requests.get(url)
+    r = requests.get(url, timeout=30)
     if not r.ok:
         return None
 
@@ -257,4 +257,5 @@ class Server(Thread):
 
     def stop(self, *args):
         self.binary = None
-        self.process.terminate()
+        if self.process is not None:
+            self.process.terminate()

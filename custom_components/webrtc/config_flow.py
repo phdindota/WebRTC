@@ -87,8 +87,10 @@ class FlowHandler(ConfigFlow, domain=DOMAIN):
                 config.setdefault("rtsp", {}).setdefault("password", pasw)
 
             if config:
-                with open(path, "w") as f:
-                    yaml.dump(config, f)
+                def _write_config():
+                    with open(path, "w") as f:
+                        yaml.dump(config, f)
+                await self.hass.async_add_executor_job(_write_config)
 
             return self.async_create_entry(title="WebRTC Camera", data={})
 

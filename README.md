@@ -1,8 +1,10 @@
-# WebRTC Camera
+# WebRTC Camera (Enhanced Fork)
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
-![](https://img.shields.io/github/stars/AlexxIT/WebRTC?style=flat-square&logo=github) 
-![](https://img.shields.io/github/forks/AlexxIT/WebRTC?style=flat-square&logo=github) 
+![](https://img.shields.io/github/stars/phdindota/WebRTC?style=flat-square&logo=github) 
+![](https://img.shields.io/github/forks/phdindota/WebRTC?style=flat-square&logo=github) 
+
+> **Note:** This is an enhanced fork of [AlexxIT/WebRTC](https://github.com/AlexxIT/WebRTC) with bug fixes and improvements. Full credit to [@AlexxIT](https://github.com/AlexxIT) for the original implementation.
 
 [Home Assistant](https://www.home-assistant.io/) custom component for real-time viewing of almost any camera stream using [WebRTC](https://en.wikipedia.org/wiki/WebRTC) and other technologies.
 
