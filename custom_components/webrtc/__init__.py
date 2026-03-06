@@ -91,8 +91,8 @@ async def async_setup(hass: HomeAssistant, config: dict):
         LINKS[link_id] = {
             "url": call.data.get("url"),  # camera URL (rtsp...)
             "entity": call.data.get("entity"),  # camera entity id
-            "limit": 1,  # 1 attempt
-            "ts": time.time() + 30,  # for 30 seconds
+            "limit": 0,  # unlimited reconnections for cast sessions
+            "ts": 0,     # no expiry - link valid for entire cast session
         }
 
         hass_url = call.data.get("hass_url") or get_url(hass)

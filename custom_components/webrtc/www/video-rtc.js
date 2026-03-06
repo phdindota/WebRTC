@@ -130,6 +130,12 @@ export class VideoRTC extends HTMLElement {
         this.reconnectTID = 0;
 
         /**
+         * [internal] WebRTC disconnected state grace-period TimeoutID.
+         * @type {number}
+         */
+        this.pcDisconnectTID = 0;
+
+        /**
          * [internal] Handler for receiving Binary from WebSocket.
          * @type {Function}
          */
@@ -312,6 +318,11 @@ export class VideoRTC extends HTMLElement {
         if (this.ws) {
             this.ws.close();
             this.ws = null;
+        }
+
+        if (this.pcDisconnectTID) {
+            clearTimeout(this.pcDisconnectTID);
+            this.pcDisconnectTID = 0;
         }
 
         this.pcState = WebSocket.CLOSED;
@@ -498,6 +509,10 @@ export class VideoRTC extends HTMLElement {
 
         pc.addEventListener('connectionstatechange', () => {
             if (pc.connectionState === 'connected') {
+                if (this.pcDisconnectTID) {
+                    clearTimeout(this.pcDisconnectTID);
+                    this.pcDisconnectTID = 0;
+                }
                 const tracks = pc.getTransceivers()
                     .filter(tr => tr.currentDirection === 'recvonly') // skip inactive
                     .map(tr => tr.receiver.track);
@@ -505,7 +520,24 @@ export class VideoRTC extends HTMLElement {
                 const video2 = document.createElement('video');
                 video2.addEventListener('loadeddata', () => this.onpcvideo(video2), {once: true});
                 video2.srcObject = new MediaStream(tracks);
-            } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            } else if (pc.connectionState === 'disconnected') {
+                // disconnected is transient - wait before reconnecting
+                if (!this.pcDisconnectTID) {
+                    this.pcDisconnectTID = setTimeout(() => {
+                        this.pcDisconnectTID = 0;
+                        if (this.pc && this.pc.connectionState !== 'connected') {
+                            this.pc.close();
+                            this.pcState = WebSocket.CLOSED;
+                            this.pc = null;
+                            this.onconnect();
+                        }
+                    }, 5000);
+                }
+            } else if (pc.connectionState === 'failed') {
+                if (this.pcDisconnectTID) {
+                    clearTimeout(this.pcDisconnectTID);
+                    this.pcDisconnectTID = 0;
+                }
                 pc.close(); // stop next events
 
                 this.pcState = WebSocket.CLOSED;

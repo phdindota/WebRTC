@@ -76,7 +76,15 @@
         else config[k] = v;
     }
 
+    // CAST FIX 1: Force background mode to prevent visibilityCheck
+    // from killing the stream when Chromecast enters ambient mode
+    config.background = true;
+
     const card = document.createElement('webrtc-camera');
+
+    // CAST FIX 2: Faster reconnect timeout (5s instead of 15s)
+    card.RECONNECT_TIMEOUT = 5000;
+
     card.setConfig(config);
     card.hass = {
         callWS: () => new Promise(resolve => {
@@ -160,6 +168,55 @@
         clearInterval(pollInterval);
         hideSplash();
     }, 8000);
+
+    // --- CAST FIX 3: Stall watchdog ---
+    // Monitors video.currentTime and forces reconnect if stream is frozen
+    let lastPlayTime = -1;
+    let stallSince = 0;
+    // Track when we last saw healthy playback for the fatal reload timer
+    let lastHealthyTimestamp = Date.now();
+
+    setInterval(() => {
+        const shadow = card.shadowRoot;
+        const video = shadow
+            ? shadow.querySelector('video')
+            : card.querySelector('video');
+
+        if (!video) return;
+
+        const currentTime = video.currentTime;
+        const now = Date.now();
+
+        // Check if video is progressing
+        if (currentTime !== lastPlayTime && currentTime > 0) {
+            lastPlayTime = currentTime;
+            stallSince = 0;
+            lastHealthyTimestamp = now;
+        } else if (!video.paused && currentTime > 0) {
+            // Video is supposed to be playing but currentTime isn't advancing
+            if (stallSince === 0) {
+                stallSince = now;
+            } else if (now - stallSince > 30000) {
+                // Stalled for 30 seconds — force reconnect
+                console.warn('[WebRTC Cast] Stream stalled for 30s, forcing reconnect');
+                stallSince = 0;
+                lastPlayTime = -1;
+                try {
+                    card.ondisconnect();
+                    setTimeout(() => card.onconnect(), 1000);
+                } catch (e) {
+                    console.error('[WebRTC Cast] Reconnect failed:', e);
+                }
+            }
+        }
+
+        // CAST FIX 4: Fatal failure auto-reload
+        // If no healthy playback for 60 seconds, full page reload
+        if (now - lastHealthyTimestamp > 60000) {
+            console.warn('[WebRTC Cast] No playback for 60s, reloading page');
+            location.reload();
+        }
+    }, 5000);
 </script>
 </body>
 </html>
