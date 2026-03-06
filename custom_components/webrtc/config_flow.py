@@ -5,13 +5,18 @@ import platform
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 import yaml
-from homeassistant.config_entries import ConfigFlow
+from homeassistant.config_entries import ConfigFlow, OptionsFlow
 from homeassistant.const import CONF_URL, CONF_USERNAME, CONF_PASSWORD
 
 from . import DOMAIN, utils
 
 
 class FlowHandler(ConfigFlow, domain=DOMAIN):
+    VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(config_entry):
+        return OptionsFlowHandler(config_entry)
     async def async_step_user(self, user_input=None):
         # check if only one integration instance
         if self._async_current_entries():
@@ -105,4 +110,26 @@ class FlowHandler(ConfigFlow, domain=DOMAIN):
                 }
             ),
             description_placeholders={"path": path},
+        )
+
+
+class OptionsFlowHandler(OptionsFlow):
+    """Handle options flow."""
+
+    def __init__(self, config_entry):
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current_url = self.config_entry.data.get(CONF_URL, "")
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_URL, default=current_url): cv.string,
+                }
+            ),
         )

@@ -57,3 +57,15 @@ dash_cast:
       example: http://192.168.1.123:8123
       selector:
         text:
+
+stop_cast:
+  name: Stop Cast
+  description: Stop casting camera stream on Chromecast devices
+  fields:
+    entity_id:
+      name: Entity
+      description: Media player entity IDs to stop casting on
+      required: true
+      selector:
+        entity:
+          domain: media_player
